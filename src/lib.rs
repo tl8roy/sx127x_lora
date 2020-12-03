@@ -235,6 +235,55 @@ where
         }
     }
 
+    /// Builds and returns a new instance of the radio. Only one instance of the radio should exist at a time.
+    /// This DOES NOT perform a hardware reset. This must be done by the user
+    pub fn new_async(
+        spi: SPI,
+        cs: CS,
+        reset: RESET,
+        frequency: i64,
+    ) -> Self{
+        LoRa {
+            spi,
+            cs,
+            reset,
+            frequency,
+            explicit_header: true,
+            mode: RadioMode::Sleep,
+        }
+    }
+        
+    /// Start the reset process
+    pub fn reset_start(&mut self) -> Result<(), Error<E, CS::Error, RESET::Error>>  {
+        Ok(self.reset.set_low().map_err(Reset)?)
+    }
+
+    /// Complete the reset process
+    /// This should be done at least 10ms after calling ```reset_start```
+    pub fn reset_end(&mut self) -> Result<(), Error<E, CS::Error, RESET::Error>>  {
+        Ok(self.reset.set_high().map_err(Reset)?)
+    }
+
+    /// Finish Initialising the device after it has been reset
+    /// This should be done at least 10ms after resetting the device
+    pub fn finish_init(&mut self) -> Result<(), Error<E, CS::Error, RESET::Error>>  {
+        let version = self.read_register(Register::RegVersion.addr())?;
+        if version == VERSION_CHECK {
+            self.set_mode(RadioMode::Sleep)?;
+            self.set_frequency(self.frequency)?;
+            self.write_register(Register::RegFifoTxBaseAddr.addr(), 0)?;
+            self.write_register(Register::RegFifoRxBaseAddr.addr(), 0)?;
+            let lna = self.read_register(Register::RegLna.addr())?;
+            self.write_register(Register::RegLna.addr(), lna | 0x03)?;
+            self.write_register(Register::RegModemConfig3.addr(), 0x04)?;
+            self.set_mode(RadioMode::Stdby)?;
+            self.cs.set_high().map_err(CS)?;
+            Ok(())
+        } else {
+            Err(Error::VersionMismatch(version))
+        }
+    }
+
     /// Transmits up to 255 bytes of data. To avoid the use of an allocator, this takes a fixed 255 u8
     /// array and a payload size and returns the number of bytes sent if successful.
     pub fn transmit_payload_busy(
